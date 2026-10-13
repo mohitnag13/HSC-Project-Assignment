@@ -1,0 +1,56 @@
+# Local end-to-end run: the ingestion container against the bundled mock SHC API.
+#
+#   mkdir -p output
+#   docker compose up --build --abort-on-container-exit --exit-code-from ingest
+#
+# In production only the `ingest` service is used, with SHC_API_URL and
+# SHC_API_TOKEN (or SHC_API_TOKEN_FILE) pointing at the real SHC Platform.
+name: shc-ingest
+
+x-shc-image: &shc-image
+  build: ./backend
+  image: shc-ingest:1.0.0
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
+services:
+  mock-shc-api:
+    <<: [*shc-image, *hardening]
+    command: ["mock-api"]
+    environment:
+      HOST: 0.0.0.0
+      MOCK_API_PORT: "4010"
+      MOCK_API_TOKEN: ${SHC_API_TOKEN:-local-dev-token}
+      # Inject some faults so the retry and backoff paths are exercised.
+      MOCK_FAILURE_RATE: ${MOCK_FAILURE_RATE:-0.1}
+      MOCK_THROTTLE_RATE: ${MOCK_THROTTLE_RATE:-0.05}
+      LOG_FORMAT: json
+    ports:
+      - "4010:4010"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4010/health').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  ingest:
+    <<: [*shc-image, *hardening]
+    depends_on:
+      mock-shc-api:
+        condition: service_healthy
+    # The image runs as uid 1000; override so the container can write to an ./output you own.
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    environment:
+      SHC_API_URL: http://mock-shc-api:4010/v1/patients
+      SHC_API_TOKEN: ${SHC_API_TOKEN:-local-dev-token}
+      BATCH_SIZE: "100"
+      MAX_REQUESTS_PER_SECOND: "5"
+      LOG_FORMAT: json
+    volumes:
+      - ./backend/data:/data/input:ro
+      - ./output:/data/output
+    tmpfs:
+      - /tmp

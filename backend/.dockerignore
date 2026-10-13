@@ -1,0 +1,16 @@
+# Keep the build context to what the image needs: no local installs, outputs,
+# patient data or secrets ever enter an image layer.
+node_modules
+dist
+output
+coverage
+test
+data
+*.md
+*.log
+.env
+.env.*
+!.env.example
+Dockerfile
+.dockerignore
+vitest.config.ts
